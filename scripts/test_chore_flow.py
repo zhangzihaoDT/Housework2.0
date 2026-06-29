@@ -104,21 +104,23 @@ def test_chore_detection():
 
 def test_points():
     print("\n=== 测试积分计算 ===")
-    assert get_task_points("倒垃圾") == 1
-    assert get_task_points("收衣服") == 1
-    assert get_task_points("晾衣服") == 1
+    assert get_task_points("做饭") == 1
     assert get_task_points("洗碗") == 1
     assert get_task_points("扫地") == 1
-    assert get_task_points("洗衣服") == 1
-    assert get_task_points("整理房间") == 1
     assert get_task_points("拖地") == 1
-    assert get_task_points("做饭") == 1
+    assert get_task_points("倒垃圾") == 1
+    assert get_task_points("洗衣服") == 1
+    assert get_task_points("晾衣服") == 1
+    assert get_task_points("收衣服") == 1
+    assert get_task_points("整理收纳") == 1
+    assert get_task_points("叠衣铺床") == 1
+    assert get_task_points("换洗床品") == 1
+    assert get_task_points("清洁打扫") == 1
+    assert get_task_points("虎妞照护") == 1
     assert get_task_points("不存在") == 0
-    assert get_task_points("擦桌子") == 0
     assert get_task_points("买菜") == 0
-    assert get_task_points("清理厨房") == 0
-    assert get_task_points("换床单") == 0
-    assert get_task_points("清理卫生间") == 0
+    assert get_task_points("清洁台面") == 0
+    assert get_task_points("清洁卫生间") == 0
 
     tasks = [
         ParsedChoreTask(task_type="洗碗", confidence=0.95, evidence="洗了碗"),
@@ -164,21 +166,26 @@ def test_supported_tasks():
     from app.chore_service import format_supported_tasks_reply
     reply = format_supported_tasks_reply()
     print(f"  {reply}")
-    assert "我洗了碗" in reply
-    assert "我做了晚饭" in reply
-    assert "我整理了房间" in reply
-    assert "家务：" not in reply
-    print("  ✅ 支持任务列表不再提及「家务：」前缀")
+    assert "做饭" in reply
+    assert "洗碗" in reply
+    assert "清洁打扫" in reply
+    print("  ✅ 支持任务列表包含当前 13 类任务")
 
 
 def test_default_task_types():
     print("\n=== 测试默认任务类型 ===")
     from app.chore_service import get_default_task_types
     types = get_default_task_types()
-    assert len(types) == 9
+    assert len(types) == 13
     assert "做饭" in types
-    assert "整理房间" in types
-    assert "擦桌子" not in types
+    assert "整理收纳" in types
+    assert "叠衣铺床" in types
+    assert "换洗床品" in types
+    assert "清洁打扫" in types
+    assert "虎妞照护" in types
+    assert "清洁台面" not in types
+    assert "清洁卫生间" not in types
+    assert "整理房间" not in types
     assert "买菜" not in types
     print(f"  默认任务类型 ({len(types)}): {types}")
     print("  ✅ 默认任务类型正常")

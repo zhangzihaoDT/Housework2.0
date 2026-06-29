@@ -13,15 +13,19 @@ logger = logging.getLogger(__name__)
 CHORE_PREFIXES = ("家务：", "家务:")
 
 TASK_POINTS: dict[str, int] = {
-    "倒垃圾": 1,
-    "收衣服": 1,
-    "晾衣服": 1,
+    "做饭": 1,
     "洗碗": 1,
     "扫地": 1,
-    "洗衣服": 1,
-    "整理房间": 1,
     "拖地": 1,
-    "做饭": 1,
+    "倒垃圾": 1,
+    "洗衣服": 1,
+    "晾衣服": 1,
+    "收衣服": 1,
+    "整理收纳": 1,
+    "叠衣铺床": 1,
+    "换洗床品": 1,
+    "清洁打扫": 1,
+    "虎妞照护": 1,
 }
 
 _member_map: dict[str, str] | None = None
@@ -68,7 +72,7 @@ def calculate_total_points(tasks: list[ParsedChoreTask]) -> int:
     return sum(get_task_points(t.task_type) for t in tasks)
 
 
-SUPPORTED_TASKS_TEXT = "我会记录已完成的家务，例如：「我洗了碗」「我做了晚饭」「我整理了房间」。"
+SUPPORTED_TASKS_TEXT = "当前支持：做饭、洗碗、扫地、拖地、倒垃圾、洗衣服、晾衣服、收衣服、整理收纳、叠衣铺床、换洗床品、清洁打扫、虎妞照护。"
 
 
 def format_supported_tasks_reply() -> str:
