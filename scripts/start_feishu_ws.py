@@ -103,6 +103,7 @@ async def main():
 
     logger.info("starting feishu websocket channel ...")
     await channel.connect()
+    logger.info("connected to wss://msg-frontier.feishu.cn")
 
 
 if __name__ == "__main__":

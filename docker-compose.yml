@@ -1,0 +1,10 @@
+services:
+  housework-feishu-bot:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - BOT_RUN_MODE=ws
+    restart: unless-stopped
