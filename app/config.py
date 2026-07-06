@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     feishu_table_raw_inputs: str = ""
     feishu_table_task_rules: str = ""
     feishu_table_chore_records: str = ""
+    feishu_table_reminder_records: str = ""
 
     member_map_json: str = ""
 

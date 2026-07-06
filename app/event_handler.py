@@ -15,6 +15,12 @@ from app.chore_service import (
 )
 from app.feishu_client import feishu_client
 from app.llm_parser import llm_parser
+from app.reminder_service import (
+    matches_reminder_pattern,
+    get_today_info,
+    build_remind_at,
+    format_create_reply,
+)
 from app.schemas import FeishuMessageEvent, ParsedIncomingMessage
 from app.time_utils import now_local
 
@@ -73,6 +79,54 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
                 msg.message_id,
             )
 
+    # --- Try reminder parsing first (if message looks like a reminder) ---
+    if matches_reminder_pattern(chore_text):
+        today_date, weekday_cn = get_today_info()
+        reminder_result = await llm_parser.parse_reminder_text(
+            chore_text, today_date, weekday_cn
+        )
+        if reminder_result.is_reminder:
+            logger.info(
+                "parsed as reminder: message_id=%s target=%s event=%s date=%s time=%s",
+                msg.message_id,
+                reminder_result.target_person or "(family)",
+                reminder_result.event_text,
+                reminder_result.event_date,
+                reminder_result.remind_time,
+            )
+
+            scope = "family" if not reminder_result.target_person else "member"
+            remind_dt = build_remind_at(reminder_result.event_date, reminder_result.remind_time)
+            remind_ts = int(remind_dt.timestamp())
+
+            if bitable_client.is_configured:
+                try:
+                    await bitable_client.append_reminder_record(
+                        raw_text=raw_text,
+                        creator=get_member_name(msg.sender_open_id),
+                        scope=scope,
+                        target_person=reminder_result.target_person,
+                        event_text=reminder_result.event_text,
+                        event_date=reminder_result.event_date,
+                        remind_at=remind_ts,
+                        remind_text=reminder_result.remind_text,
+                        chat_id=msg.chat_id,
+                    )
+                except Exception:
+                    logger.exception("reminder record write failed: message_id=%s", msg.message_id)
+
+            reply = format_create_reply(reminder_result)
+            await feishu_client.send_text_message(
+                msg.receive_id_type, msg.receive_id, reply
+            )
+            logger.info(
+                "replied to reminder: message_id=%s reply=%s",
+                msg.message_id,
+                reply,
+            )
+            return reply
+
+    # --- Chore parsing ---
     logger.info(
         "calling LLM to parse: message_id=%s chore_text=%s",
         msg.message_id,

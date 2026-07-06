@@ -17,6 +17,7 @@ class BitableClient:
         self._app_token = settings.feishu_bitable_app_token
         self._table_raw_inputs = settings.feishu_table_raw_inputs
         self._table_chore_records = settings.feishu_table_chore_records
+        self._table_reminder_records = settings.feishu_table_reminder_records
         self._base_url = "https://open.feishu.cn/open-apis"
         self._client = httpx.AsyncClient(base_url=self._base_url)
         self._fields_cache: dict[str, list[str]] = {}
@@ -355,6 +356,164 @@ class BitableClient:
             )
             results.append(result)
         return results
+
+    async def append_reminder_record(
+        self,
+        raw_text: str,
+        creator: str,
+        scope: str,
+        target_person: str,
+        event_text: str,
+        event_date: str,
+        remind_at: int,
+        remind_text: str,
+        chat_id: str,
+    ) -> dict | None:
+        from app.time_utils import to_feishu_timestamp_ms, to_datetime
+
+        fields = {
+            "raw_text": raw_text,
+            "creator": creator,
+            "scope": scope,
+            "target_person": target_person,
+            "event_text": event_text,
+            "event_date": to_feishu_timestamp_ms(to_datetime(event_date)),
+            "remind_at": remind_at * 1000 if remind_at < 1_000_000_000_000 else remind_at,
+            "remind_text": remind_text,
+            "chat_id": chat_id,
+            "status": "pending",
+            "created_at": to_feishu_timestamp_ms(now_local()),
+            "sent_at": 0,
+        }
+        return await self._append_record(self._table_reminder_records, fields)
+
+    async def search_reminders_by_filter(self, field_name: str, operator: str, value: list) -> list[dict]:
+        if not self._app_token or not self._table_reminder_records:
+            return []
+
+        headers = await self._get_headers()
+        if not headers:
+            return []
+
+        url = f"/bitable/v1/apps/{self._app_token}/tables/{self._table_reminder_records}/records/search"
+
+        payload: dict = {
+            "field_names": ["record_id", "remind_text", "chat_id", "remind_at", "status"],
+            "filter": {
+                "conjunction": "and",
+                "conditions": [
+                    {
+                        "field_name": field_name,
+                        "operator": operator,
+                        "value": value,
+                    }
+                ],
+            },
+            "page_size": 50,
+        }
+
+        try:
+            resp = await self._client.post(url, headers=headers, json=payload)
+            result = resp.json()
+            if result.get("code") == 0:
+                return result.get("data", {}).get("items", [])
+            logger.warning(
+                "search reminders failed: code=%s msg=%s body=%s",
+                result.get("code"),
+                result.get("msg"),
+                json.dumps(result, ensure_ascii=False),
+            )
+            return []
+        except httpx.HTTPError as e:
+            logger.warning("search reminders HTTP error: %s", e)
+            return []
+
+    async def find_pending_reminders(self, now_ts_ms: int) -> list[dict]:
+        if not self._app_token or not self._table_reminder_records:
+            return []
+
+        headers = await self._get_headers()
+        if not headers:
+            return []
+
+        url = f"/bitable/v1/apps/{self._app_token}/tables/{self._table_reminder_records}/records/search"
+
+        payload = {
+            "field_names": ["record_id", "remind_text", "chat_id", "remind_at", "status"],
+            "filter": {
+                "conjunction": "and",
+                "conditions": [
+                    {
+                        "field_name": "status",
+                        "operator": "is",
+                        "value": ["pending"],
+                    },
+                    {
+                        "field_name": "remind_at",
+                        "operator": "less_than_or_equal_to",
+                        "value": [now_ts_ms],
+                    },
+                ],
+            },
+            "page_size": 50,
+        }
+
+        try:
+            resp = await self._client.post(url, headers=headers, json=payload)
+            result = resp.json()
+            if result.get("code") == 0:
+                items = result.get("data", {}).get("items", [])
+                logger.info("found %d pending reminder(s) to send", len(items))
+                return items
+            logger.warning(
+                "find pending reminders failed: code=%s msg=%s body=%s",
+                result.get("code"),
+                result.get("msg"),
+                json.dumps(result, ensure_ascii=False),
+            )
+            return []
+        except httpx.HTTPError as e:
+            logger.warning("find pending reminders HTTP error: %s", e)
+            return []
+
+    async def update_reminder_status(
+        self, record_id: str, status: str, sent_at: int
+    ) -> bool:
+        if not self._app_token or not self._table_reminder_records or not record_id:
+            return False
+
+        headers = await self._get_headers()
+        if not headers:
+            return False
+
+        url = (
+            f"/bitable/v1/apps/{self._app_token}/tables"
+            f"/{self._table_reminder_records}/records/{record_id}"
+        )
+
+        payload = {
+            "fields": {
+                "status": status,
+                "sent_at": sent_at * 1000 if sent_at < 1_000_000_000_000 else sent_at,
+            }
+        }
+
+        try:
+            resp = await self._client.put(url, headers=headers, json=payload)
+            result = resp.json()
+            if result.get("code") == 0:
+                logger.info("reminder %s updated to %s", record_id, status)
+                return True
+            logger.warning(
+                "update reminder status failed: record_id=%s code=%s msg=%s",
+                record_id,
+                result.get("code"),
+                result.get("msg"),
+            )
+            return False
+        except httpx.HTTPError as e:
+            logger.warning("update reminder status HTTP error: %s", e)
+            return False
 
 
 bitable_client = BitableClient()

@@ -52,3 +52,13 @@ class LLMParseResult(BaseModel):
     ignored: list[str] = []
     need_confirm: bool = False
     raw_response: str | None = None
+
+
+class ReminderParsedResult(BaseModel):
+    is_reminder: bool = False
+    target_person: str = ""
+    event_text: str = ""
+    event_date: str = ""
+    remind_time: str = ""
+    remind_text: str = ""
+    raw_response: str | None = None
