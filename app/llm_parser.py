@@ -466,8 +466,8 @@ REMINDER_SYSTEM_PROMPT = """你是一个家庭智能提醒解析引擎。
 
 ## 提醒文案生成规则
 remind_text 是到点后群里显示的消息，要简洁自然：
-- 成员级："今天 {target_person} {event_text}"，例如"今天 shuyao 去杭州"
-- 家庭级："今天全家{event_text}"，例如"今天全家去迪士尼"
+- 成员级："今天 {{target_person}} {{event_text}}"，例如"今天 shuyao 去杭州"
+- 家庭级："今天全家{{event_text}}"，例如"今天全家去迪士尼"
 - 保持原文的自然表达风格
 
 ## 输出格式

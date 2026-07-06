@@ -73,7 +73,7 @@ async def test_append_reminder_record_fields():
             assert fields["event_text"] == "去杭州"
             assert fields["chat_id"] == "oc_fake_chat"
             assert fields["status"] == "pending"
-            assert fields["sent_at"] == 0
+            assert "sent_at" not in fields, "sent_at should NOT be set for new reminders"
 
 
 @pytest.mark.asyncio

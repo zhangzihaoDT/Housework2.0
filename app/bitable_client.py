@@ -383,7 +383,6 @@ class BitableClient:
             "chat_id": chat_id,
             "status": "pending",
             "created_at": to_feishu_timestamp_ms(now_local()),
-            "sent_at": 0,
         }
         return await self._append_record(self._table_reminder_records, fields)
 
