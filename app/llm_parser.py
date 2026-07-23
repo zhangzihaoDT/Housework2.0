@@ -1,14 +1,13 @@
-"""调用 LLM 将自然语言解析为结构化家务任务或家庭提醒"""
+"""调用 LLM 将自然语言解析为结构化家务任务"""
 
 import json
 import logging
 import re
-from datetime import datetime, timezone, timedelta
 
 import httpx
 
 from app.config import settings
-from app.schemas import LLMParseResult, ParsedChoreTask, ReminderParsedResult
+from app.schemas import LLMParseResult, ParsedChoreTask
 
 logger = logging.getLogger(__name__)
 
@@ -353,139 +352,6 @@ class LLMParser:
             need_confirm=need_confirm,
             raw_response=raw,
         )
-
-    async def parse_reminder_text(
-        self, text: str, today_date: str, weekday_cn: str
-    ) -> ReminderParsedResult:
-        if not self._api_key:
-            logger.error("LLM_API_KEY not configured")
-            return ReminderParsedResult(raw_response="LLM_API_KEY not configured")
-
-        system_prompt = (
-            REMINDER_SYSTEM_PROMPT.format(today_date=today_date, weekday_cn=weekday_cn)
-        )
-        user_prompt = f"请解析以下内容：{text}"
-
-        try:
-            resp = await self._client.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self._model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.1,
-                },
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            content = body["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error("LLM reminder parse API call failed: %s", e)
-            return ReminderParsedResult(raw_response=str(e))
-
-        return self._parse_reminder_response(content)
-
-    def _parse_reminder_response(self, content: str) -> ReminderParsedResult:
-        raw = content
-        try:
-            json_str = _extract_json(content)
-            data = json.loads(json_str)
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error("LLM reminder JSON parse failed: %s, raw=%s", e, content)
-            return ReminderParsedResult(raw_response=raw)
-
-        if not isinstance(data, dict):
-            return ReminderParsedResult(raw_response=raw)
-
-        is_reminder = bool(data.get("is_reminder", False))
-        if not is_reminder:
-            return ReminderParsedResult(is_reminder=False, raw_response=raw)
-
-        return ReminderParsedResult(
-            is_reminder=True,
-            target_person=str(data.get("target_person", "")).strip(),
-            event_text=str(data.get("event_text", "")).strip(),
-            event_date=str(data.get("event_date", "")).strip(),
-            remind_time=str(data.get("remind_time", "")).strip(),
-            remind_text=str(data.get("remind_text", "")).strip(),
-            raw_response=raw,
-        )
-
-
-REMINDER_SYSTEM_PROMPT = """你是一个家庭智能提醒解析引擎。
-
-## 核心任务
-判断用户输入是否在创建一条未来提醒（待办事项/行程），如果是，解析出结构化信息。
-
-## 判断标准
-是提醒的特征：
-- 包含未来时间表达：明天、后天、下周三、下个月5号、7月12日等
-- 描述一个未来要发生的事情、行程、安排
-- 可能包含指定成员（如shuyao、zihao、妈妈、爸爸）或没有明确成员（即家庭全体）
-- 包含"提醒我"字样的通常是提醒
-
-不是提醒（is_reminder=false）的例子：
-- 闲聊：你好、在吗、你是谁、测试
-- 已完成事项：我洗了碗、我扫了地、衣服洗好了（这些是家务记录）
-- 疑问句：今天谁洗碗？你吃饭了吗
-- 抱怨/状态描述：厨房好乱、地好脏
-- 简短回复：好、知道了、收到、可以
-
-## 时间解析规则
-今天的日期是 {today_date}，星期{weekday_cn}。计算相对日期时请基于此推导。
-
-- 明天 → {today_date} + 1天
-- 后天 → {today_date} + 2天
-- 下周一~下周日 → 下一个对应的周几
-- 下周 → 下周一的日期
-- 下个月5号 → 下个月5号的日期
-- 7月12日 → 今年7月12日（如果已过则明年）
-- 2026年7月12日 → 直接使用
-
-时间默认规则：
-- 如果用户说"早上" → 08:00
-- 如果用户说"上午" → 09:00
-- 如果用户说"中午" → 12:00
-- 如果用户说"下午" → 14:00
-- 如果用户说"晚上" → 19:00
-- 如果用户说X点 → X:00
-- 如果用户说X点X分 → X:XX（保持原样）
-- 如果用户没有指定时间 → 08:00（默认）
-
-## 提醒对象解析规则
-- 如果提到家庭成员名（如shuyao、zihao、妈妈、爸爸等），target_person设为该成员名
-- 如果没有明确成员，target_person设为空字符串（表示家庭级提醒）
-- "我"在提醒语境下不映射到具体成员，target_person设为""（家庭级）
-- "全家"、"大家"、"我们" → target_person设为""（家庭级）
-
-## 提醒文案生成规则
-remind_text 是到点后群里显示的消息，要简洁自然：
-- 成员级："今天 {{target_person}} {{event_text}}"，例如"今天 shuyao 去杭州"
-- 家庭级："今天全家{{event_text}}"，例如"今天全家去迪士尼"
-- 保持原文的自然表达风格
-
-## 输出格式
-{{
-  "is_reminder": true 或 false,
-  "target_person": "成员名（成员级）或空字符串（家庭级）",
-  "event_text": "事项内容，简洁明了",
-  "event_date": "YYYY-MM-DD格式",
-  "remind_time": "HH:MM格式（24小时制）",
-  "remind_text": "到点后发给群里的提醒消息正文"
-}}
-
-要求：
-- 如果不确定是否提醒，is_reminder设为false
-- event_date必须是有效的YYYY-MM-DD格式
-- remind_time必须是有效的HH:MM格式
-- remind_text不要超过100字
-- 不是所有包含时间的句子都是提醒，注意区分"""
 
 
 llm_parser = LLMParser()

@@ -1,7 +1,7 @@
 [project]
 name = "housework-feishu-bot"
-version = "0.1.0"
-description = "飞书家务积分机器人 — 用 LLM 解析家务消息并记录到飞书多维表格"
+version = "0.2.0"
+description = "飞书家务积分机器人 — 用 LLM 解析家务消息，双周积分结算，飞书卡片推送"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",

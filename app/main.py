@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -6,6 +7,8 @@ from fastapi.responses import JSONResponse
 
 from app.event_handler import handle_feishu_message_event
 from app.schemas import FeishuChallenge
+from app.settlement_scheduler import start_settlement_scheduler
+from app.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,7 +20,14 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("service starting ...")
+    tasks = []
+    if settings.settlement_enabled:
+        task = asyncio.create_task(start_settlement_scheduler())
+        tasks.append(task)
+        logger.info("settlement scheduler started")
     yield
+    for t in tasks:
+        t.cancel()
     logger.info("service shutting down ...")
 
 

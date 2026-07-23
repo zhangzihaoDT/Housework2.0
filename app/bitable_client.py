@@ -7,7 +7,7 @@ import httpx
 
 from app.config import settings
 from app.feishu_client import feishu_client as _feishu_client
-from app.time_utils import to_feishu_timestamp_ms, now_local
+from app.time_utils import to_feishu_timestamp_ms
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class BitableClient:
         self._app_token = settings.feishu_bitable_app_token
         self._table_raw_inputs = settings.feishu_table_raw_inputs
         self._table_chore_records = settings.feishu_table_chore_records
-        self._table_reminder_records = settings.feishu_table_reminder_records
+        self._table_settlement_records = settings.feishu_table_settlement_records
         self._base_url = "https://open.feishu.cn/open-apis"
         self._client = httpx.AsyncClient(base_url=self._base_url)
         self._fields_cache: dict[str, list[str]] = {}
@@ -65,6 +65,74 @@ class BitableClient:
             logger.info("bitable record appended: record_id=%s", record_id)
 
         return result
+
+    async def _update_record(self, table_id: str, record_id: str, fields: dict) -> dict | None:
+        if not self._app_token or not table_id or not record_id:
+            return None
+
+        headers = await self._get_headers()
+        if not headers:
+            return None
+
+        url = f"/bitable/v1/apps/{self._app_token}/tables/{table_id}/records/{record_id}"
+
+        try:
+            resp = await self._client.put(url, headers=headers, json={"fields": fields})
+            result = resp.json()
+        except httpx.HTTPError as e:
+            logger.error("bitable update HTTP request failed: url=%s error=%s", url, e)
+            raise
+
+        if result.get("code") != 0:
+            logger.error(
+                "bitable update record failed: url=%s code=%s msg=%s data=%s body=%s",
+                url,
+                result.get("code"),
+                result.get("msg"),
+                result.get("data"),
+                json.dumps(result, ensure_ascii=False),
+            )
+        else:
+            logger.info("bitable record updated: record_id=%s", record_id)
+
+        return result
+
+    async def _search_records(
+        self, table_id: str, field_names: list[str], conditions: list[dict], page_size: int = 50
+    ) -> list[dict]:
+        if not self._app_token or not table_id:
+            return []
+
+        headers = await self._get_headers()
+        if not headers:
+            return []
+
+        url = f"/bitable/v1/apps/{self._app_token}/tables/{table_id}/records/search"
+
+        payload = {
+            "field_names": field_names,
+            "filter": {
+                "conjunction": "and",
+                "conditions": conditions,
+            },
+            "page_size": page_size,
+        }
+
+        try:
+            resp = await self._client.post(url, headers=headers, json=payload)
+            result = resp.json()
+            if result.get("code") == 0:
+                return result.get("data", {}).get("items", [])
+            msg = (
+                f"bitable search failed: url={url} "
+                f"code={result.get('code')} msg={result.get('msg')} "
+                f"body={json.dumps(result, ensure_ascii=False)}"
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+        except httpx.HTTPError as e:
+            logger.error("bitable search HTTP error: %s", e)
+            raise
 
     async def list_table_fields(self, table_id: str) -> list[str]:
         if not self._app_token or not table_id:
@@ -156,7 +224,7 @@ class BitableClient:
             "record_id", "message_id", "chat_id", "sender_id",
             "member_name", "task_type", "points", "confidence",
             "evidence", "source_text", "status", "created_at",
-            "date", "week", "month",
+            "date", "week", "month", "period_id",
         }
 
         raw_fields = await self._get_table_fields_cached(self._table_raw_inputs)
@@ -256,7 +324,7 @@ class BitableClient:
         reply_text: str | None = None,
         error_message: str | None = None,
     ) -> dict | None:
-        from app.time_utils import to_feishu_timestamp_ms, to_datetime
+        from app.time_utils import to_datetime
 
         fields = {
             "message_id": message_id,
@@ -296,8 +364,9 @@ class BitableClient:
         date: int | None = None,
         week: str | None = None,
         month: str | None = None,
+        period_id: str | None = None,
     ) -> dict | None:
-        from app.time_utils import to_feishu_timestamp_ms, to_datetime
+        from app.time_utils import to_datetime
 
         fields = {
             "message_id": message_id,
@@ -319,6 +388,8 @@ class BitableClient:
             fields["week"] = week
         if month is not None:
             fields["month"] = month
+        if period_id is not None:
+            fields["period_id"] = period_id
         return await self._append_record(self._table_chore_records, fields)
 
     async def append_chore_records(
@@ -333,6 +404,7 @@ class BitableClient:
         date: str | None = None,
         week: str | None = None,
         month: str | None = None,
+        period_id: str | None = None,
     ) -> list[dict | None]:
         from app.chore_service import get_task_points
 
@@ -353,108 +425,83 @@ class BitableClient:
                 date=date,
                 week=week,
                 month=month,
+                period_id=period_id,
             )
             results.append(result)
         return results
 
-    async def append_reminder_record(
+    async def find_chore_records_by_period(self, period_id: str) -> list[dict]:
+        if not self._app_token or not self._table_chore_records:
+            return []
+        return await self._search_records(
+            table_id=self._table_chore_records,
+            field_names=["member_name", "points", "task_type"],
+            conditions=[
+                {
+                    "field_name": "period_id",
+                    "operator": "is",
+                    "value": [period_id],
+                }
+            ],
+        )
+
+    async def create_settlement_record(
         self,
-        raw_text: str,
-        creator: str,
-        scope: str,
-        target_person: str,
-        event_text: str,
-        event_date: str,
-        remind_at: int,
-        remind_text: str,
-        chat_id: str,
+        period_id: str,
+        period_start: str,
+        period_end: str,
+        status: str,
+        total_points: int,
+        member_summary: str,
+        record_count: int,
     ) -> dict | None:
-        from app.time_utils import to_feishu_timestamp_ms, to_datetime
+        from app.time_utils import now_local
 
         fields = {
-            "raw_text": raw_text,
-            "creator": creator,
-            "scope": scope,
-            "target_person": target_person,
-            "event_text": event_text,
-            "event_date": to_feishu_timestamp_ms(to_datetime(event_date)),
-            "remind_at": remind_at * 1000 if remind_at < 1_000_000_000_000 else remind_at,
-            "remind_text": remind_text,
-            "chat_id": chat_id,
-            "status": "pending",
+            "period_id": period_id,
+            "period_start": to_feishu_timestamp_ms(now_local()),
+            "period_end": to_feishu_timestamp_ms(now_local()),
+            "status": status,
+            "total_points": total_points,
+            "member_summary": member_summary,
+            "record_count": record_count,
             "created_at": to_feishu_timestamp_ms(now_local()),
         }
-        return await self._append_record(self._table_reminder_records, fields)
+        return await self._append_record(self._table_settlement_records, fields)
 
-    async def search_reminders_by_filter(self, field_name: str, operator: str, value: list) -> list[dict]:
-        if not self._app_token or not self._table_reminder_records:
-            return []
+    async def update_settlement_record(
+        self,
+        record_id: str,
+        status: str,
+        feishu_message_id: str = "",
+        error_message: str = "",
+    ) -> dict | None:
+        fields = {"status": status}
+        if feishu_message_id:
+            fields["feishu_message_id"] = feishu_message_id
+        if error_message:
+            fields["error_message"] = error_message
+        from app.time_utils import now_local
+        fields["sent_at"] = to_feishu_timestamp_ms(now_local())
+        return await self._update_record(self._table_settlement_records, record_id, fields)
 
-        headers = await self._get_headers()
-        if not headers:
-            return []
-
-        url = f"/bitable/v1/apps/{self._app_token}/tables/{self._table_reminder_records}/records/search"
-
-        payload: dict = {
-            "field_names": ["record_id", "remind_text", "chat_id", "remind_at", "status"],
-            "filter": {
-                "conjunction": "and",
-                "conditions": [
-                    {
-                        "field_name": field_name,
-                        "operator": operator,
-                        "value": value,
-                    }
-                ],
-            },
-            "page_size": 50,
-        }
-
-        try:
-            resp = await self._client.post(url, headers=headers, json=payload)
-            result = resp.json()
-            if result.get("code") == 0:
-                return result.get("data", {}).get("items", [])
-            logger.warning(
-                "search reminders failed: code=%s msg=%s body=%s",
-                result.get("code"),
-                result.get("msg"),
-                json.dumps(result, ensure_ascii=False),
-            )
-            return []
-        except httpx.HTTPError as e:
-            logger.warning("search reminders HTTP error: %s", e)
-            return []
-
-    async def find_pending_reminders(self, now_ts_ms: int) -> list[dict]:
-        if not self._app_token or not self._table_reminder_records:
-            return []
+    async def find_settled_period_ids(self) -> dict:
+        if not self._app_token or not self._table_settlement_records:
+            return {}
 
         headers = await self._get_headers()
         if not headers:
-            return []
+            return {}
 
-        url = f"/bitable/v1/apps/{self._app_token}/tables/{self._table_reminder_records}/records/search"
+        url = f"/bitable/v1/apps/{self._app_token}/tables/{self._table_settlement_records}/records/search"
 
         payload = {
-            "field_names": ["record_id", "remind_text", "chat_id", "remind_at", "status"],
+            "field_names": ["period_id", "status"],
             "filter": {
                 "conjunction": "and",
-                "conditions": [
-                    {
-                        "field_name": "status",
-                        "operator": "is",
-                        "value": ["pending"],
-                    },
-                    {
-                        "field_name": "remind_at",
-                        "operator": "less_than_or_equal_to",
-                        "value": [now_ts_ms],
-                    },
-                ],
+                "conditions": [],
             },
-            "page_size": 50,
+            "page_size": 200,
         }
 
         try:
@@ -462,57 +509,82 @@ class BitableClient:
             result = resp.json()
             if result.get("code") == 0:
                 items = result.get("data", {}).get("items", [])
-                logger.info("found %d pending reminder(s) to send", len(items))
-                return items
+                settled: dict = {}
+                for item in items:
+                    fields = item.get("fields", {})
+                    pid = fields.get("period_id", "")
+                    s = fields.get("status", "")
+                    if pid:
+                        if s in ("sent", "failed"):
+                            settled[pid] = {"status": s, "record_id": item.get("record_id", "")}
+                return settled
             logger.warning(
-                "find pending reminders failed: code=%s msg=%s body=%s",
+                "find settled period_ids failed: code=%s msg=%s body=%s",
                 result.get("code"),
                 result.get("msg"),
                 json.dumps(result, ensure_ascii=False),
             )
-            return []
+            return {}
         except httpx.HTTPError as e:
-            logger.warning("find pending reminders HTTP error: %s", e)
-            return []
+            logger.warning("find settled period_ids HTTP error: %s", e)
+            return {}
 
-    async def update_reminder_status(
-        self, record_id: str, status: str, sent_at: int
-    ) -> bool:
-        if not self._app_token or not self._table_reminder_records or not record_id:
-            return False
+    async def find_chore_records_by_time_range(
+        self,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> list[dict]:
+        if not self._app_token or not self._table_chore_records:
+            raise RuntimeError("bitable not configured")
 
+        all_records: list[dict] = []
+        page_token: str | None = None
         headers = await self._get_headers()
         if not headers:
-            return False
+            raise RuntimeError("failed to get auth token")
 
-        url = (
-            f"/bitable/v1/apps/{self._app_token}/tables"
-            f"/{self._table_reminder_records}/records/{record_id}"
-        )
+        url = f"/bitable/v1/apps/{self._app_token}/tables/{self._table_chore_records}/records"
 
-        payload = {
-            "fields": {
-                "status": status,
-                "sent_at": sent_at * 1000 if sent_at < 1_000_000_000_000 else sent_at,
+        while True:
+            params: dict = {
+                "page_size": 500,
             }
-        }
+            if page_token:
+                params["page_token"] = page_token
 
-        try:
-            resp = await self._client.put(url, headers=headers, json=payload)
-            result = resp.json()
-            if result.get("code") == 0:
-                logger.info("reminder %s updated to %s", record_id, status)
-                return True
-            logger.warning(
-                "update reminder status failed: record_id=%s code=%s msg=%s",
-                record_id,
-                result.get("code"),
-                result.get("msg"),
-            )
-            return False
-        except httpx.HTTPError as e:
-            logger.warning("update reminder status HTTP error: %s", e)
-            return False
+            try:
+                resp = await self._client.get(url, headers=headers, params=params)
+                result = resp.json()
+            except httpx.HTTPError as e:
+                logger.error("bitable list records HTTP error: %s", e)
+                raise
+
+            if result.get("code") != 0:
+                msg = (
+                    f"bitable list records failed: url={url} "
+                    f"code={result.get('code')} msg={result.get('msg')} "
+                    f"body={json.dumps(result, ensure_ascii=False)}"
+                )
+                logger.error(msg)
+                raise RuntimeError(msg)
+
+            items = result.get("data", {}).get("items", [])
+            for item in items:
+                fields = item.get("fields", {})
+                created_at_val = fields.get("created_at")
+                if created_at_val is None:
+                    continue
+                ts = int(created_at_val)
+                if start_timestamp_ms <= ts < end_timestamp_ms:
+                    all_records.append(item)
+
+            has_more = result.get("data", {}).get("has_more", False)
+            if not has_more:
+                break
+            page_token = result.get("data", {}).get("page_token")
+
+        logger.info("find_chore_records_by_time_range: %d records after filter", len(all_records))
+        return all_records
 
 
 bitable_client = BitableClient()

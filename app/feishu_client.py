@@ -81,5 +81,43 @@ class FeishuClient:
             logger.info("message sent successfully: message_id=%s", result.get("data", {}).get("message_id"))
         return result
 
+    async def send_interactive_card(
+        self,
+        receive_id: str,
+        card: dict,
+        receive_id_type: str = "chat_id",
+    ) -> dict:
+        token = await self.get_tenant_access_token()
+        if not token:
+            logger.error("cannot send card: no valid tenant_access_token")
+            return {}
+
+        headers = {"Authorization": f"Bearer {token}"}
+        payload = {
+            "receive_id": receive_id,
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False),
+        }
+
+        resp = await self._client.post(
+            f"/im/v1/messages?receive_id_type={receive_id_type}",
+            headers=headers,
+            json=payload,
+        )
+        result = resp.json()
+        if result.get("code") != 0:
+            logger.error(
+                "send interactive card failed: code=%s msg=%s data=%s",
+                result.get("code"),
+                result.get("msg"),
+                result.get("data"),
+            )
+        else:
+            logger.info(
+                "interactive card sent successfully: message_id=%s",
+                result.get("data", {}).get("message_id"),
+            )
+        return result
+
 
 feishu_client = FeishuClient()

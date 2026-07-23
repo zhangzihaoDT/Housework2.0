@@ -21,7 +21,7 @@ def test_now_local():
     assert dt.year >= 2026, f"year should be >= 2026, got {dt.year}"
     print(f"  year={dt.year} ✅")
     assert dt.tzinfo is not None, "should be timezone-aware"
-    print(f"  timezone-aware ✅")
+    print("  timezone-aware ✅")
 
 
 def test_to_datetime_none():
@@ -80,7 +80,7 @@ def test_get_date_fields_with_seconds():
     fields = get_date_fields(ts)
     print(f"  date={fields['date']}")
     assert "1970" not in fields["date"]
-    print(f"  ✅ 秒级 timestamp 正确转换为当前日期")
+    print("  ✅ 秒级 timestamp 正确转换为当前日期")
 
 
 def test_get_date_fields_with_milliseconds():
@@ -89,7 +89,7 @@ def test_get_date_fields_with_milliseconds():
     fields = get_date_fields(ts)
     print(f"  date={fields['date']}")
     assert "1970" not in fields["date"]
-    print(f"  ✅ 毫秒级 timestamp 正确转换为当前日期")
+    print("  ✅ 毫秒级 timestamp 正确转换为当前日期")
 
 
 def test_week_format():

@@ -15,14 +15,10 @@ from app.chore_service import (
 )
 from app.feishu_client import feishu_client
 from app.llm_parser import llm_parser
-from app.reminder_service import (
-    matches_reminder_pattern,
-    get_today_info,
-    build_remind_at,
-    format_create_reply,
-)
 from app.schemas import FeishuMessageEvent, ParsedIncomingMessage
 from app.time_utils import now_local
+from app.settlement_period import compute_period_id
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +32,13 @@ def _dedup(message_id: str) -> bool:
     if len(_processed_message_ids) > 10000:
         _processed_message_ids.clear()
     return False
+
+
+def _get_current_period_id() -> str:
+    anchor = settings.settlement_anchor_date
+    if anchor:
+        return compute_period_id(anchor, settings.settlement_interval_days)
+    return ""
 
 
 async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
@@ -63,7 +66,6 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
         )
         return None
 
-    # Layer 2: persistent dedup (check raw_inputs table)
     if bitable_client.is_configured:
         try:
             already_exists = await bitable_client.find_raw_input_by_message_id(msg.message_id)
@@ -79,54 +81,6 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
                 msg.message_id,
             )
 
-    # --- Try reminder parsing first (if message looks like a reminder) ---
-    if matches_reminder_pattern(chore_text):
-        today_date, weekday_cn = get_today_info()
-        reminder_result = await llm_parser.parse_reminder_text(
-            chore_text, today_date, weekday_cn
-        )
-        if reminder_result.is_reminder:
-            logger.info(
-                "parsed as reminder: message_id=%s target=%s event=%s date=%s time=%s",
-                msg.message_id,
-                reminder_result.target_person or "(family)",
-                reminder_result.event_text,
-                reminder_result.event_date,
-                reminder_result.remind_time,
-            )
-
-            scope = "family" if not reminder_result.target_person else "member"
-            remind_dt = build_remind_at(reminder_result.event_date, reminder_result.remind_time)
-            remind_ts = int(remind_dt.timestamp())
-
-            if bitable_client.is_configured:
-                try:
-                    await bitable_client.append_reminder_record(
-                        raw_text=raw_text,
-                        creator=get_member_name(msg.sender_open_id),
-                        scope=scope,
-                        target_person=reminder_result.target_person,
-                        event_text=reminder_result.event_text,
-                        event_date=reminder_result.event_date,
-                        remind_at=remind_ts,
-                        remind_text=reminder_result.remind_text,
-                        chat_id=msg.chat_id,
-                    )
-                except Exception:
-                    logger.exception("reminder record write failed: message_id=%s", msg.message_id)
-
-            reply = format_create_reply(reminder_result)
-            await feishu_client.send_text_message(
-                msg.receive_id_type, msg.receive_id, reply
-            )
-            logger.info(
-                "replied to reminder: message_id=%s reply=%s",
-                msg.message_id,
-                reply,
-            )
-            return reply
-
-    # --- Chore parsing ---
     logger.info(
         "calling LLM to parse: message_id=%s chore_text=%s",
         msg.message_id,
@@ -143,7 +97,6 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
         result.need_confirm,
     )
 
-    # Determine status for raw_inputs
     if result.tasks:
         status = "parsed"
     elif result.need_confirm:
@@ -154,8 +107,8 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
     now = now_local()
     received_at = int(now.timestamp())
     member_name = get_member_name(msg.sender_open_id)
+    period_id = _get_current_period_id()
 
-    # --- Compute totals and build base reply ---
     total_points = calculate_total_points(result.tasks) if result.tasks else 0
     task_count = len(result.tasks)
 
@@ -164,10 +117,11 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
     if result.tasks:
         base_reply = format_chore_reply(result.tasks, total_points)
         logger.info(
-            "parsed chores: message_id=%s tasks=%s total_points=%d",
+            "parsed chores: message_id=%s tasks=%s total_points=%d period_id=%s",
             msg.message_id,
             [t.task_type for t in result.tasks],
             total_points,
+            period_id,
         )
     elif result.need_confirm:
         base_reply = (
@@ -202,7 +156,6 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
             chore_text,
         )
 
-    # --- Write raw_inputs (best-effort, include base reply) ---
     raw_input_ok = True
     if bitable_client.is_configured:
         try:
@@ -225,7 +178,6 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
             raw_input_ok = False
             logger.exception("raw_inputs write failed: message_id=%s", msg.message_id)
 
-    # --- Write chore_records (best-effort) ---
     chore_records_ok = True
     if bitable_client.is_configured and result.tasks:
         try:
@@ -237,13 +189,13 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
                 source_text=chore_text,
                 member_name=member_name,
                 date=received_at,
+                period_id=period_id,
             )
             chore_records_ok = all(r is not None and r.get("code") == 0 for r in cr_results)
         except Exception:
             chore_records_ok = False
             logger.exception("chore_records write failed: message_id=%s", msg.message_id)
 
-    # --- Build final reply (adjust for write status) ---
     write_ok = raw_input_ok and chore_records_ok
     if result.tasks and not write_ok:
         reply_text = base_reply.replace("已记录", "已识别", 1)

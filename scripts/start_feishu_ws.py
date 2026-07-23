@@ -101,16 +101,17 @@ async def main():
 
     channel.on("reconnected", on_reconnected)
 
-    scheduler_task = asyncio.create_task(start_reminder_scheduler())
-    logger.info("reminder scheduler background task created")
+    if settings.settlement_enabled:
+        _scheduler_task = asyncio.create_task(start_settlement_scheduler())
+        logger.info("settlement scheduler background task created")
 
     logger.info("starting feishu websocket channel ...")
     await channel.connect()
     logger.info("connected to wss://msg-frontier.feishu.cn")
 
 
-async def start_reminder_scheduler():
-    from app.reminder_scheduler import start_reminder_scheduler as _scheduler
+async def start_settlement_scheduler():
+    from app.settlement_scheduler import start_settlement_scheduler as _scheduler
 
     await _scheduler()
 

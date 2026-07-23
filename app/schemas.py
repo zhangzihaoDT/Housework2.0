@@ -54,11 +54,21 @@ class LLMParseResult(BaseModel):
     raw_response: str | None = None
 
 
-class ReminderParsedResult(BaseModel):
-    is_reminder: bool = False
-    target_person: str = ""
-    event_text: str = ""
-    event_date: str = ""
-    remind_time: str = ""
-    remind_text: str = ""
-    raw_response: str | None = None
+class SettlementPeriodInfo(BaseModel):
+    period_id: str
+    period_start: str
+    period_end: str
+
+
+class MemberPoints(BaseModel):
+    member_name: str
+    points: int
+
+
+class SettlementSummary(BaseModel):
+    period_id: str
+    period_start: str
+    period_end: str
+    summary: list[MemberPoints]
+    total_points: int
+    record_count: int

@@ -31,7 +31,6 @@ from app.chore_service import (
     normalize_chore_input_text,
 )
 from app.schemas import ParsedChoreTask
-from app.time_utils import to_feishu_timestamp_ms
 
 
 def test_member_mapping():

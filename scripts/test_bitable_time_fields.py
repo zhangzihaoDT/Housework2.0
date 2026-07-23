@@ -1,13 +1,12 @@
 """测试多维表格时间字段写入"""
 
 import asyncio
-import json
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.time_utils import get_date_fields, now_local, to_feishu_timestamp_ms
+from app.time_utils import get_date_fields, now_local
 
 
 async def main():
@@ -80,7 +79,7 @@ async def main():
         print("时间字段写入测试通过 ✅")
         print("\n请在飞书多维表格中检查：")
         print(f"  - raw_inputs.received_at: 显示当前日期 {date_fields['date']}")
-        print(f"  - chore_records.created_at: 显示当前日期时间")
+        print("  - chore_records.created_at: 显示当前日期时间")
         print(f"  - chore_records.date: 显示当前日期 {date_fields['date']}")
         print(f"  - chore_records.week: 显示 {date_fields['week']}")
         print(f"  - chore_records.month: 显示 {date_fields['month']}")
