@@ -133,20 +133,34 @@ async def execute_settlement(period: dict) -> dict:
 
     totals: dict[str, int] = {}
     record_count = 0
-    for r in records:
+    for idx, r in enumerate(records):
         fields = r.get("fields", {})
+        if idx == 0:
+            logger.warning("DEBUG first record fields: %s", json.dumps(fields, ensure_ascii=False, default=str))
         member_name = fields.get("member_name", "")
         if isinstance(member_name, list):
-            member_name = next(
-                (item.get("name", "") if isinstance(item, dict) else str(item) for item in member_name),
-                "",
-            )
+            extracted = ""
+            for item in member_name:
+                if isinstance(item, dict):
+                    extracted = item.get("name") or item.get("text") or item.get("value") or ""
+                    if extracted:
+                        break
+                elif isinstance(item, str):
+                    extracted = item
+                    break
+            member_name = extracted
         points = fields.get("points", 0)
         if isinstance(points, list):
             points = points[0] if points else 0
-        if isinstance(points, (int, float)) and member_name:
-            totals[member_name] = totals.get(member_name, 0) + int(points)
+        if not isinstance(points, (int, float)):
+            try:
+                points = float(points) if points else 0
+            except (TypeError, ValueError):
+                points = 0
+        if member_name:
+            totals[str(member_name)] = totals.get(str(member_name), 0) + int(points)
             record_count += 1
+    logger.info("settlement aggregation: period_id=%s records=%d counted=%d totals=%s", period_id, len(records), record_count, totals)
 
     member_map = get_member_map()
     summary = _build_member_summary(totals, member_map)
