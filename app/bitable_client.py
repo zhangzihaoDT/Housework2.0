@@ -457,7 +457,7 @@ class BitableClient:
     ) -> dict | None:
         from app.time_utils import to_datetime, to_feishu_timestamp_ms
 
-        fields = {
+        desired = {
             "period_id": period_id,
             "period_start": to_feishu_timestamp_ms(to_datetime(period_start)),
             "period_end": to_feishu_timestamp_ms(to_datetime(period_end)),
@@ -466,6 +466,17 @@ class BitableClient:
             "member_summary": member_summary,
             "record_count": record_count,
         }
+        try:
+            existing = set(await self._get_table_fields_cached(self._table_settlement_records))
+        except Exception:
+            existing = set(desired.keys())
+        fields = {k: v for k, v in desired.items() if k in existing}
+        skipped = sorted(set(desired.keys()) - set(fields.keys()))
+        if skipped:
+            logger.warning("settlement_records missing fields, skipped: %s", skipped)
+        if "period_id" not in fields:
+            logger.error("settlement_records table missing required 'period_id' field, cannot write")
+            return None
         return await self._append_record(self._table_settlement_records, fields)
 
     async def update_settlement_record(
@@ -475,13 +486,19 @@ class BitableClient:
         feishu_message_id: str = "",
         error_message: str = "",
     ) -> dict | None:
-        fields = {"status": status}
-        if feishu_message_id:
-            fields["feishu_message_id"] = feishu_message_id
-        if error_message:
-            fields["error_message"] = error_message
         from app.time_utils import now_local
-        fields["sent_at"] = to_feishu_timestamp_ms(now_local())
+
+        desired = {"status": status}
+        if feishu_message_id:
+            desired["feishu_message_id"] = feishu_message_id
+        if error_message:
+            desired["error_message"] = error_message
+        desired["sent_at"] = to_feishu_timestamp_ms(now_local())
+        try:
+            existing = set(await self._get_table_fields_cached(self._table_settlement_records))
+        except Exception:
+            existing = set(desired.keys())
+        fields = {k: v for k, v in desired.items() if k in existing}
         return await self._update_record(self._table_settlement_records, record_id, fields)
 
     async def find_settled_period_ids(self) -> dict:
