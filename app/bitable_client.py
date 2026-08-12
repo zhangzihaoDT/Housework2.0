@@ -12,6 +12,20 @@ from app.time_utils import to_feishu_timestamp_ms
 logger = logging.getLogger(__name__)
 
 
+def _field_text(value) -> str:
+    """Extract plain text from Bitable text/rich-text field values."""
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("name") or item.get("value")
+                if text:
+                    return str(text)
+            elif item:
+                return str(item)
+        return ""
+    return str(value) if value is not None else ""
+
+
 class BitableClient:
     def __init__(self) -> None:
         self._app_token = settings.feishu_bitable_app_token
@@ -528,8 +542,8 @@ class BitableClient:
                 settled: dict = {}
                 for item in items:
                     fields = item.get("fields", {})
-                    pid = fields.get("period_id", "")
-                    s = fields.get("status", "")
+                    pid = _field_text(fields.get("period_id", ""))
+                    s = _field_text(fields.get("status", ""))
                     if pid:
                         if s in ("sent", "failed"):
                             settled[pid] = {"status": s, "record_id": item.get("record_id", "")}
