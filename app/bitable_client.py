@@ -455,17 +455,16 @@ class BitableClient:
         member_summary: str,
         record_count: int,
     ) -> dict | None:
-        from app.time_utils import now_local
+        from app.time_utils import to_datetime, to_feishu_timestamp_ms
 
         fields = {
             "period_id": period_id,
-            "period_start": to_feishu_timestamp_ms(now_local()),
-            "period_end": to_feishu_timestamp_ms(now_local()),
+            "period_start": to_feishu_timestamp_ms(to_datetime(period_start)),
+            "period_end": to_feishu_timestamp_ms(to_datetime(period_end)),
             "status": status,
             "total_points": total_points,
             "member_summary": member_summary,
             "record_count": record_count,
-            "created_at": to_feishu_timestamp_ms(now_local()),
         }
         return await self._append_record(self._table_settlement_records, fields)
 

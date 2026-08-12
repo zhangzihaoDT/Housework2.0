@@ -133,10 +133,8 @@ async def execute_settlement(period: dict) -> dict:
 
     totals: dict[str, int] = {}
     record_count = 0
-    for idx, r in enumerate(records):
+    for r in records:
         fields = r.get("fields", {})
-        if idx == 0:
-            logger.warning("DEBUG first record fields: %s", json.dumps(fields, ensure_ascii=False, default=str))
         member_name = fields.get("member_name", "")
         if isinstance(member_name, list):
             extracted = ""
