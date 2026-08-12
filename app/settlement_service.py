@@ -2,7 +2,6 @@
 
 import json
 import logging
-from datetime import date
 
 from app.bitable_client import bitable_client
 from app.feishu_client import feishu_client
@@ -112,7 +111,10 @@ def _build_empty_card(period: dict, next_settlement: str) -> dict:
 
 
 async def execute_settlement(period: dict) -> dict:
-    anchor_date = date.fromisoformat(settings.settlement_anchor_date)
+    anchor_date = settings.settlement_anchor_date
+    if anchor_date is None:
+        logger.warning("SETTLEMENT_ANCHOR_DATE not configured, skipping execute_settlement")
+        return {"success": False, "reason": "anchor_date not configured"}
     interval_days = settings.settlement_interval_days
     settlement_time = settings.settlement_time
 
