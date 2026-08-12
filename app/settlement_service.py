@@ -136,8 +136,15 @@ async def execute_settlement(period: dict) -> dict:
     for r in records:
         fields = r.get("fields", {})
         member_name = fields.get("member_name", "")
+        if isinstance(member_name, list):
+            member_name = next(
+                (item.get("name", "") if isinstance(item, dict) else str(item) for item in member_name),
+                "",
+            )
         points = fields.get("points", 0)
-        if isinstance(points, (int, float)):
+        if isinstance(points, list):
+            points = points[0] if points else 0
+        if isinstance(points, (int, float)) and member_name:
             totals[member_name] = totals.get(member_name, 0) + int(points)
             record_count += 1
 
