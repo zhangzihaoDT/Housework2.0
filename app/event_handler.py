@@ -4,6 +4,7 @@ import json
 import logging
 
 from app.bitable_client import bitable_client
+from app.chore_rules import match_chores
 from app.chore_service import (
     calculate_total_points,
     extract_chore_text,
@@ -15,7 +16,8 @@ from app.chore_service import (
 )
 from app.feishu_client import feishu_client
 from app.llm_parser import llm_parser
-from app.schemas import FeishuMessageEvent, ParsedIncomingMessage
+from app.query_service import classify_intent, handle_period_score, handle_recent_chores
+from app.schemas import FeishuMessageEvent, LLMParseResult, ParsedIncomingMessage
 from app.time_utils import now_local
 from app.settlement_period import compute_period_id
 from app.config import settings
@@ -45,6 +47,25 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
     if _dedup(msg.message_id):
         logger.info("ignored duplicate message_id=%s", msg.message_id)
         return None
+
+    if settings.query_enabled:
+        try:
+            intent = classify_intent(msg.raw_text)
+        except Exception:
+            logger.exception("intent classification failed: message_id=%s", msg.message_id)
+            intent = {"type": "chore_log"}
+
+        try:
+            if intent["type"] == "recent_chores":
+                days = int(intent.get("days", 5))
+                return await handle_recent_chores(msg, days)
+            if intent["type"] == "period_score":
+                return await handle_period_score(msg, str(intent.get("period", "current")))
+        except Exception:
+            logger.exception("query handling failed: message_id=%s", msg.message_id)
+            error_text = "查询失败，请稍后再试。"
+            await feishu_client.send_text_message(msg.receive_id_type, msg.receive_id, error_text)
+            return error_text
 
     raw_text = msg.raw_text
     normalized = normalize_chore_input_text(raw_text)
@@ -89,12 +110,29 @@ async def handle_chore_message(msg: ParsedIncomingMessage) -> str | None:
 
     result = await llm_parser.parse_chore_text(chore_text, get_default_task_types())
 
+    if result.failed and settings.rule_fallback_enabled:
+        fallback_tasks = match_chores(chore_text)
+        if fallback_tasks:
+            logger.info(
+                "LLM unavailable, rule fallback matched: message_id=%s tasks=%s",
+                msg.message_id,
+                [t.task_type for t in fallback_tasks],
+            )
+            result = LLMParseResult(
+                tasks=fallback_tasks,
+                need_confirm=False,
+                raw_response="rule fallback",
+            )
+        else:
+            logger.warning("LLM unavailable and rule fallback matched nothing: message_id=%s", msg.message_id)
+
     logger.info(
-        "LLM result: message_id=%s tasks=%d ignored=%s need_confirm=%s",
+        "LLM result: message_id=%s tasks=%d ignored=%s need_confirm=%s failed=%s",
         msg.message_id,
         len(result.tasks),
         result.ignored,
         result.need_confirm,
+        result.failed,
     )
 
     if result.tasks:

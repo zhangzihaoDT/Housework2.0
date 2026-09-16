@@ -33,7 +33,10 @@ class BitableClient:
         self._table_chore_records = settings.feishu_table_chore_records
         self._table_settlement_records = settings.feishu_table_settlement_records
         self._base_url = "https://open.feishu.cn/open-apis"
-        self._client = httpx.AsyncClient(base_url=self._base_url)
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+        )
         self._fields_cache: dict[str, list[str]] = {}
         self._fields_id_cache: dict[str, dict[str, str]] = {}
 
@@ -112,7 +115,7 @@ class BitableClient:
         return result
 
     async def _search_records(
-        self, table_id: str, field_names: list[str], conditions: list[dict], page_size: int = 50
+        self, table_id: str, field_names: list[str], conditions: list[dict], page_size: int = 500
     ) -> list[dict]:
         if not self._app_token or not table_id:
             return []
@@ -123,30 +126,45 @@ class BitableClient:
 
         url = f"/bitable/v1/apps/{self._app_token}/tables/{table_id}/records/search"
 
-        payload = {
-            "field_names": field_names,
-            "filter": {
-                "conjunction": "and",
-                "conditions": conditions,
-            },
-            "page_size": page_size,
-        }
+        records: list[dict] = []
+        page_token: str | None = None
+        while True:
+            payload: dict = {
+                "field_names": field_names,
+                "filter": {
+                    "conjunction": "and",
+                    "conditions": conditions,
+                },
+                "page_size": page_size,
+            }
+            if page_token:
+                payload["page_token"] = page_token
 
-        try:
-            resp = await self._client.post(url, headers=headers, json=payload)
-            result = resp.json()
-            if result.get("code") == 0:
-                return result.get("data", {}).get("items", [])
-            msg = (
-                f"bitable search failed: url={url} "
-                f"code={result.get('code')} msg={result.get('msg')} "
-                f"body={json.dumps(result, ensure_ascii=False)}"
-            )
-            logger.error(msg)
-            raise RuntimeError(msg)
-        except httpx.HTTPError as e:
-            logger.error("bitable search HTTP error: %s", e)
-            raise
+            try:
+                resp = await self._client.post(url, headers=headers, json=payload)
+                result = resp.json()
+            except httpx.HTTPError as e:
+                logger.error("bitable search HTTP error: %s", e)
+                raise
+
+            if result.get("code") != 0:
+                msg = (
+                    f"bitable search failed: url={url} "
+                    f"code={result.get('code')} msg={result.get('msg')} "
+                    f"body={json.dumps(result, ensure_ascii=False)}"
+                )
+                logger.error(msg)
+                raise RuntimeError(msg)
+
+            data = result.get("data", {})
+            records.extend(data.get("items", []))
+            if not data.get("has_more"):
+                break
+            page_token = data.get("page_token")
+            if not page_token:
+                break
+
+        return records
 
     async def list_table_fields(self, table_id: str) -> list[str]:
         if not self._app_token or not table_id:
@@ -468,6 +486,7 @@ class BitableClient:
         total_points: int,
         member_summary: str,
         record_count: int,
+        retry_count: int = 0,
     ) -> dict | None:
         from app.time_utils import to_datetime, to_feishu_timestamp_ms
 
@@ -479,6 +498,7 @@ class BitableClient:
             "total_points": total_points,
             "member_summary": member_summary,
             "record_count": record_count,
+            "retry_count": retry_count,
         }
         try:
             existing = set(await self._get_table_fields_cached(self._table_settlement_records))
@@ -499,14 +519,17 @@ class BitableClient:
         status: str,
         feishu_message_id: str = "",
         error_message: str = "",
+        retry_count: int | None = None,
     ) -> dict | None:
         from app.time_utils import now_local
 
-        desired = {"status": status}
+        desired: dict = {"status": status}
         if feishu_message_id:
             desired["feishu_message_id"] = feishu_message_id
         if error_message:
             desired["error_message"] = error_message
+        if retry_count is not None:
+            desired["retry_count"] = retry_count
         desired["sent_at"] = to_feishu_timestamp_ms(now_local())
         try:
             existing = set(await self._get_table_fields_cached(self._table_settlement_records))
@@ -525,39 +548,64 @@ class BitableClient:
 
         url = f"/bitable/v1/apps/{self._app_token}/tables/{self._table_settlement_records}/records/search"
 
-        payload = {
-            "field_names": ["period_id", "status"],
-            "filter": {
-                "conjunction": "and",
-                "conditions": [],
-            },
-            "page_size": 200,
-        }
+        settled: dict = {}
+        page_token: str | None = None
+        while True:
+            payload: dict = {
+                "field_names": ["period_id", "status", "retry_count"],
+                "filter": {
+                    "conjunction": "and",
+                    "conditions": [],
+                },
+                "page_size": 500,
+            }
+            if page_token:
+                payload["page_token"] = page_token
 
-        try:
-            resp = await self._client.post(url, headers=headers, json=payload)
-            result = resp.json()
-            if result.get("code") == 0:
-                items = result.get("data", {}).get("items", [])
-                settled: dict = {}
-                for item in items:
-                    fields = item.get("fields", {})
-                    pid = _field_text(fields.get("period_id", ""))
-                    s = _field_text(fields.get("status", ""))
-                    if pid:
-                        if s in ("sent", "failed"):
-                            settled[pid] = {"status": s, "record_id": item.get("record_id", "")}
-                return settled
-            logger.warning(
-                "find settled period_ids failed: code=%s msg=%s body=%s",
-                result.get("code"),
-                result.get("msg"),
-                json.dumps(result, ensure_ascii=False),
-            )
-            return {}
-        except httpx.HTTPError as e:
-            logger.warning("find settled period_ids HTTP error: %s", e)
-            return {}
+            try:
+                resp = await self._client.post(url, headers=headers, json=payload)
+                result = resp.json()
+            except httpx.HTTPError as e:
+                logger.warning("find settled period_ids HTTP error: %s", e)
+                raise
+
+            if result.get("code") != 0:
+                msg = (
+                    f"find settled period_ids failed: url={url} "
+                    f"code={result.get('code')} msg={result.get('msg')} "
+                    f"body={json.dumps(result, ensure_ascii=False)}"
+                )
+                logger.warning(msg)
+                raise RuntimeError(msg)
+
+            data = result.get("data", {})
+            for item in data.get("items", []):
+                fields = item.get("fields", {})
+                pid = _field_text(fields.get("period_id", ""))
+                s = _field_text(fields.get("status", ""))
+                if not pid:
+                    continue
+                retry_count = fields.get("retry_count", 0)
+                if isinstance(retry_count, list):
+                    retry_count = retry_count[0] if retry_count else 0
+                try:
+                    retry_count = int(retry_count)
+                except (TypeError, ValueError):
+                    retry_count = 0
+                if s in ("sent", "processing", "failed"):
+                    settled[pid] = {
+                        "status": s,
+                        "record_id": item.get("record_id", ""),
+                        "retry_count": retry_count,
+                    }
+
+            if not data.get("has_more"):
+                break
+            page_token = data.get("page_token")
+            if not page_token:
+                break
+
+        return settled
 
     async def find_chore_records_by_time_range(
         self,

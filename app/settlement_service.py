@@ -110,7 +110,11 @@ def _build_empty_card(period: dict, next_settlement: str) -> dict:
     }
 
 
-async def execute_settlement(period: dict) -> dict:
+async def execute_settlement(
+    period: dict,
+    existing_record_id: str = "",
+    retry_count: int = 0,
+) -> dict:
     anchor_date = settings.settlement_anchor_date
     if anchor_date is None:
         logger.warning("SETTLEMENT_ANCHOR_DATE not configured, skipping execute_settlement")
@@ -181,26 +185,56 @@ async def execute_settlement(period: dict) -> dict:
         ensure_ascii=False,
     )
 
-    result = await bitable_client.create_settlement_record(
-        period_id=period_id,
-        period_start=period_start,
-        period_end=period_end,
-        status="processing",
-        total_points=total_points,
-        member_summary=member_summary_json,
-        record_count=record_count,
-    )
-    if result is None:
-        logger.error("failed to create settlement record: period_id=%s", period_id)
-        return {"success": False, "reason": "create settlement record failed"}
+    next_retry_count = retry_count + 1 if existing_record_id else 0
 
-    record_id = result.get("data", {}).get("record", {}).get("record_id", "")
-    logger.info("settlement record created: record_id=%s period_id=%s", record_id, period_id)
+    if existing_record_id:
+        record_id = existing_record_id
+        updated = await bitable_client.update_settlement_record(
+            record_id=record_id,
+            status="processing",
+            retry_count=next_retry_count,
+        )
+        if updated is None:
+            logger.error("failed to reuse settlement record: period_id=%s", period_id)
+            return {"success": False, "reason": "update settlement record failed"}
+        logger.info(
+            "settlement record reused: record_id=%s period_id=%s retry_count=%d",
+            record_id,
+            period_id,
+            next_retry_count,
+        )
+    else:
+        result = await bitable_client.create_settlement_record(
+            period_id=period_id,
+            period_start=period_start,
+            period_end=period_end,
+            status="processing",
+            total_points=total_points,
+            member_summary=member_summary_json,
+            record_count=record_count,
+            retry_count=0,
+        )
+        if result is None:
+            logger.error("failed to create settlement record: period_id=%s", period_id)
+            return {"success": False, "reason": "create settlement record failed"}
 
-    send_result = await feishu_client.send_interactive_card(
-        receive_id=settings.settlement_chat_id,
-        card=card,
-    )
+        record_id = result.get("data", {}).get("record", {}).get("record_id", "")
+        logger.info("settlement record created: record_id=%s period_id=%s", record_id, period_id)
+
+    try:
+        send_result = await feishu_client.send_interactive_card(
+            receive_id=settings.settlement_chat_id,
+            card=card,
+        )
+    except Exception as e:
+        logger.exception("settlement send raised: period_id=%s", period_id)
+        await bitable_client.update_settlement_record(
+            record_id=record_id,
+            status="failed",
+            error_message=str(e),
+            retry_count=next_retry_count,
+        )
+        return {"success": False, "period_id": period_id, "record_id": record_id}
 
     sent_ok = send_result.get("code") == 0
     status = "sent" if sent_ok else "failed"
@@ -211,6 +245,7 @@ async def execute_settlement(period: dict) -> dict:
         status=status,
         feishu_message_id=feishu_message_id,
         error_message="" if sent_ok else str(send_result.get("msg", "")),
+        retry_count=next_retry_count,
     )
 
     if sent_ok:

@@ -231,11 +231,22 @@ SYSTEM_PROMPT = """你是一个家务任务语义理解引擎。用户会对你�
 反例："洗" → 不能模糊映射，不计分
 反例：空字符串或仅空格 → 不解析
 
+## 显式重复计数规则（重要）
+如果用户在同一句话里明确表示同一动作重复了多次，用 count 表示次数（如"拖了两次地"、"扫了地又扫了一遍"）：
+- "拖了两次地" → {{ "task_type": "拖地", "count": 2 }}
+- "扫了地，又扫了一遍" → {{ "task_type": "扫地", "count": 2 }}
+- 没有明确重复时 count 一律为 1
+
+注意：count 只用于"同一个动作重复多次"。不同子动作的去重规则不受影响：
+- "擦了桌子又擦了灶台" → 仍只输出 1 条 {{ "task_type": "清洁打扫", "count": 1 }}
+- "铲了猫砂又换了水" → 仍只输出 1 条 {{ "task_type": "虎妞照护", "count": 1 }}
+- 不要把"做饭+洗碗"这种不同任务用 count 合并，要拆成多条任务
+
 ## 输出格式
 必须返回 JSON（不要 markdown，不要解释），严格遵循以下结构：
 {{
   "tasks": [
-    {{ "task_type": "洗碗", "confidence": 0.95, "evidence": "饭后碗筷我都处理了" }}
+    {{ "task_type": "洗碗", "confidence": 0.95, "evidence": "饭后碗筷我都处理了", "count": 1 }}
   ],
   "ignored": [],
   "need_confirm": false
@@ -243,9 +254,10 @@ SYSTEM_PROMPT = """你是一个家务任务语义理解引擎。用户会对你�
 
 要求：
 - task_type 必须属于给定任务类型列表
-- 不允许输出给定列表以外的任务类型
+- 不允许输出给定任务类型列表以外的任务类型
 - confidence 取值 0~1，反映判断的确定性
 - evidence 引用用户原文中的依据
+- count 为同一动作的显式重复次数（默认 1，最大 3）
 - ignored 记录不支持的任务或原因（字符串数组）
 - need_confirm=true 表示语义模糊可能包含家务但无法稳定映射"""
 
@@ -256,6 +268,9 @@ def _extract_json(text: str) -> str:
         text = re.sub(r"^.*?```(?:json)?\s*", "", text, flags=re.DOTALL)
         text = re.sub(r"\s*```.*$", "", text, flags=re.DOTALL)
     return text.strip()
+
+
+_MAX_REPEAT = 3
 
 
 def _validate_tasks(
@@ -276,7 +291,13 @@ def _validate_tasks(
         except (ValueError, TypeError):
             confidence = 1.0
         evidence = str(t.get("evidence", "")).strip() if isinstance(t.get("evidence"), str) else ""
-        valid.append(ParsedChoreTask(task_type=task_type, confidence=confidence, evidence=evidence))
+        try:
+            count = int(t.get("count", 1))
+        except (TypeError, ValueError):
+            count = 1
+        count = max(1, min(_MAX_REPEAT, count))
+        for _ in range(count):
+            valid.append(ParsedChoreTask(task_type=task_type, confidence=confidence, evidence=evidence))
     return valid, ignored
 
 
@@ -292,7 +313,9 @@ class LLMParser:
     ) -> LLMParseResult:
         if not self._api_key:
             logger.error("LLM_API_KEY not configured")
-            return LLMParseResult(need_confirm=True, raw_response="LLM_API_KEY not configured")
+            return LLMParseResult(
+                need_confirm=True, raw_response="LLM_API_KEY not configured", failed=True
+            )
 
         valid_types = task_types or DEFAULT_TASK_TYPES
         system_prompt = SYSTEM_PROMPT.format(task_types="、".join(valid_types))
@@ -319,7 +342,7 @@ class LLMParser:
             content = body["choices"][0]["message"]["content"]
         except Exception as e:
             logger.error("LLM API call failed: %s", e)
-            return LLMParseResult(need_confirm=True, raw_response=str(e))
+            return LLMParseResult(need_confirm=True, raw_response=str(e), failed=True)
 
         return self._parse_response(content, valid_types)
 
@@ -332,7 +355,7 @@ class LLMParser:
             data = json.loads(json_str)
         except (json.JSONDecodeError, ValueError) as e:
             logger.error("LLM JSON parse failed: %s, raw=%s", e, content)
-            return LLMParseResult(need_confirm=True, raw_response=raw)
+            return LLMParseResult(need_confirm=True, raw_response=raw, failed=True)
 
         raw_tasks = data.get("tasks", []) if isinstance(data, dict) else []
         if not isinstance(raw_tasks, list):

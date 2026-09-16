@@ -52,6 +52,7 @@ class LLMParseResult(BaseModel):
     ignored: list[str] = []
     need_confirm: bool = False
     raw_response: str | None = None
+    failed: bool = False
 
 
 class SettlementPeriodInfo(BaseModel):

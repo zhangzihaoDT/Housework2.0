@@ -102,8 +102,12 @@ async def main():
     channel.on("reconnected", on_reconnected)
 
     if settings.settlement_enabled:
-        _scheduler_task = asyncio.create_task(start_settlement_scheduler())
-        logger.info("settlement scheduler background task created")
+        # Run the scheduler on the channel's background loop so that all
+        # business coroutines (message handling + settlement) share a single
+        # event loop. Reusing the module-level httpx clients across two loops
+        # raises "bound to a different event loop".
+        channel.schedule(start_settlement_scheduler())
+        logger.info("settlement scheduler scheduled on channel background loop")
 
     logger.info("starting feishu websocket channel ...")
     await channel.connect()

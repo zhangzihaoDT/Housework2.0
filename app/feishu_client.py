@@ -18,7 +18,10 @@ class FeishuClient:
         self._app_id = settings.feishu_app_id
         self._app_secret = settings.feishu_app_secret
         self._base_url = "https://open.feishu.cn/open-apis"
-        self._client = httpx.AsyncClient(base_url=self._base_url)
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+        )
 
         self._tenant_token: str = ""
         self._token_expires_at: float = 0.0

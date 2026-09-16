@@ -37,19 +37,39 @@ async def check_and_execute_settlements() -> None:
 
     for period in completed:
         period_id = period["period_id"]
-        if period_id in existing:
-            continue
+        record = existing.get(period_id)
 
-        retry_record = existing.get(period_id)
-        if retry_record and isinstance(retry_record, dict):
-            retry_count = retry_record.get("retry_count", 0)
-            status = retry_record.get("status", "")
-            if status == "failed" and retry_count >= _MAX_RETRIES:
-                logger.warning("settlement %s exceeded max retries (%d), skipping", period_id, _MAX_RETRIES)
+        retry_count = 0
+        existing_record_id = ""
+        if isinstance(record, dict):
+            status = record.get("status", "")
+            if status in ("sent", "processing"):
                 continue
+            retry_count = record.get("retry_count", 0)
+            if status == "failed":
+                if retry_count >= _MAX_RETRIES:
+                    logger.warning(
+                        "settlement %s exceeded max retries (%d), skipping",
+                        period_id,
+                        _MAX_RETRIES,
+                    )
+                    continue
+                existing_record_id = record.get("record_id", "")
 
-        logger.info("found unsent settlement: period_id=%s", period_id)
-        await execute_settlement(period)
+        logger.info(
+            "found unsent settlement: period_id=%s status=%s retry_count=%d",
+            period_id,
+            record.get("status", "") if isinstance(record, dict) else "new",
+            retry_count,
+        )
+        try:
+            await execute_settlement(
+                period,
+                existing_record_id=existing_record_id,
+                retry_count=retry_count,
+            )
+        except Exception:
+            logger.exception("settlement execution failed: period_id=%s", period_id)
 
 
 async def start_settlement_scheduler() -> None:

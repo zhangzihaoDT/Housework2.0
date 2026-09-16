@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     settlement_interval_days: int = 14
     settlement_chat_id: str = ""
 
+    rule_fallback_enabled: bool = True
+    query_enabled: bool = True
+    recent_query_max_days: int = 30
+
     @property
     def settlement_anchor_date(self) -> date | None:
         if not self.settlement_anchor_date_str:

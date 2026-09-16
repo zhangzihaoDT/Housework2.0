@@ -200,6 +200,54 @@ def test_normalize():
     print("  ✅ 文本标准化正常")
 
 
+def test_rule_parser():
+    print("\n=== 测试本地规则解析器 ===")
+    from app.chore_rules import match_chores
+
+    def types(text):
+        return [t.task_type for t in match_chores(text)]
+
+    exact_cases = {
+        "备菜": ["做饭"],
+        "我拖了地": ["拖地"],
+        "扫地": ["扫地"],
+        "打扫卫生间地板": ["清洁打扫"],
+        "拖了两次地": ["拖地", "拖地"],
+        "扫了地，又扫了一遍": ["扫地", "扫地"],
+        "擦了桌子又擦了灶台": ["清洁打扫"],
+        "铲了猫砂又换了水": ["虎妞照护"],
+        "我洗了碗还拖了地": ["洗碗", "拖地"],
+        "衣服收了，也叠好了": ["收衣服", "叠衣铺床"],
+    }
+    for text, expected in exact_cases.items():
+        got = types(text)
+        assert got == expected, f"match_chores({text!r}) = {got}, expected {expected}"
+
+    empty_cases = ["该拖地了", "提醒我洗碗", "我等会儿去洗碗", "地拖了吗", "我没扫地", "别拖地了"]
+    for text in empty_cases:
+        got = types(text)
+        assert got == [], f"match_chores({text!r}) should be empty, got {got}"
+
+    print(f"  命中用例 {len(exact_cases)} 条，排除用例 {len(empty_cases)} 条")
+    print("  ✅ 规则解析正常")
+
+
+def test_intent_classification():
+    print("\n=== 测试查询意图识别 ===")
+    from app.query_service import classify_intent
+
+    assert classify_intent("近5天我都做了哪些家务") == {"type": "recent_chores", "days": 5}
+    assert classify_intent("最近3天做了什么家务") == {"type": "recent_chores", "days": 3}
+    assert classify_intent("本轮截至目前累计得分对比") == {"type": "period_score", "period": "current"}
+    assert classify_intent("上一轮得分") == {"type": "period_score", "period": "last"}
+    assert classify_intent("我扫地了") == {"type": "chore_log"}
+    assert classify_intent("帮我记一下我拖了地") == {"type": "chore_log"}
+    assert classify_intent("你这几天真棒") == {"type": "chore_log"}
+    # 含"累计"但实为记家务，不应误判为查询
+    assert classify_intent("我累计拖了两次地") == {"type": "chore_log"}
+    print("  ✅ 意图识别正常")
+
+
 if __name__ == "__main__":
     test_member_mapping()
     test_date_fields()
@@ -210,6 +258,8 @@ if __name__ == "__main__":
     test_normalize()
     test_supported_tasks()
     test_default_task_types()
+    test_rule_parser()
+    test_intent_classification()
     print("\n" + "=" * 40)
     print("所有测试通过 ✅")
     print("=" + "=" * 40)
