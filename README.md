@@ -984,11 +984,15 @@ Sealos 应用管理的「启动命令」可留空，使用镜像默认 CMD 即�
 
 ```bash
 # 构建并推送（单架构 amd64）
-docker buildx build --platform linux/amd64 -t byte1717712/housework-feishu-bot:latest --push .
+docker buildx build --platform linux/amd64 -t zihao77/housework-feishu-bot:latest --push .
 
 # 或构建多架构清单（同时支持 amd64 + arm64，推荐）
-docker buildx build --platform linux/amd64,linux/arm64 -t byte1717712/housework-feishu-bot:latest --push .
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t zihao77/housework-feishu-bot:latest \
+  -t zihao77/housework-feishu-bot:v0.3.0 --push .
 ```
+
+> 镜像地址：`docker.io/zihao77/housework-feishu-bot`（当前版本 `v0.3.0`）。
 
 **注意**：
 - 直接 `docker build` 在 Mac Silicon 上构建的是 `arm64` 镜像，推送到 Docker Hub 后 Sealos（amd64）上会报 `exec format error`。
